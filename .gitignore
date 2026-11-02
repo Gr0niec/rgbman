@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+
+# local state and settings, created by the app
+rgbman.log
+gui_state.json
+profiles.json
+config.json
