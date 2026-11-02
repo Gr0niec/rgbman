@@ -1,6 +1,6 @@
 # rgbman
 
-Jeden program do całego podświetlenia RGB w komputerze z Windows 11. Steruje wszystkim, co widzi [OpenRGB](https://openrgb.org), oraz urządzeniami, których OpenRGB nie obsługuje. Działa w zasobniku systemowym, ma okno z podglądem na żywo i zsynchronizowane efekty, także reagujące na muzykę.
+Jeden program stworzony w celu spięcia urządzeń i wzbogacony o parę efektów. Steruje wszystkim, co widzi [OpenRGB](https://openrgb.org), oraz urządzeniami, których OpenRGB nie obsługuje. Działa w zasobniku systemowym, ma okno z podglądem na żywo i zsynchronizowane efekty, także reagujące na muzykę.
 
 ## Co potrafi
 
