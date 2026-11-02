@@ -1,0 +1,8 @@
+openrgb-python
+rivalcfg
+hidapi
+pywebview
+pystray
+pillow
+soundcard
+numpy

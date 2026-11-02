@@ -1,0 +1,24 @@
+{
+  "openrgb": {
+    "host": "127.0.0.1",
+    "port": 6742,
+    "zone_sizes": {
+      "B650 EAGLE AX": {"ARGB_V2_1/ARGB_V2_3": 26, "ARGB_V2_2": 8}
+    }
+  },
+  "rivalcfg": true,
+  "maono": true,
+  "hid": [
+    {
+      "name": "Akko TAC87",
+      "enabled": false,
+      "vid": "0x0000",
+      "pid": "0x0000",
+      "usage_page": "0xff00",
+      "method": "feature",
+      "packets": ["00 00 {r} {g} {b} 00"],
+      "max_fps": 0,
+      "delay_ms": 0
+    }
+  ]
+}
