@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import argparse
+import datetime
+import functools
 import json
+import re
 import socket
 import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -29,6 +33,7 @@ try:
     from PIL import Image, ImageDraw
 
     import rgbman
+    import rgbman_i18n
     import rgbman_win
 except Exception:
     import traceback
@@ -38,7 +43,7 @@ except Exception:
 UI_FILE = HERE / "gui.html"
 STATE_FILE = HERE / "gui_state.json"
 LOCK_PORT = 47651          # single-instance lock + "show window" signal, localhost only
-PREVIEW_MAX = 48
+PREVIEW_MAX = 128  # LEDs per device sent to the panel; it draws zones when it has them all
 
 APP_SCRIPT = Path(__file__).resolve()
 
@@ -49,9 +54,63 @@ DEFAULT_DEVICE_FX = {"effect": None, "color": None, "layout": "zones", "lead_ms"
                      "max_fps": 0}  # 0 = the device's own limit
 LEAD_MAX_MS = 300
 FPS_MIN, FPS_MAX = 5, 60
+MODE_CHECK_S = 3  # how often to verify OpenRGB still has our controllers in Direct mode
+EFFECT_GROUP = {e: g for g, _, effects in rgbman.EFFECT_GROUPS for e in effects}
+EFFECT_HINTS = {
+    "audio": "Reaguje na dźwięk z domyślnego wyjścia audio Windows.",
+    "ambilight": "Kolory z głównego ekranu, od lewej do prawej. Gry w pełnym ekranie (exclusive) "
+                 "mogą dawać czarny obraz: przełącz je na okno bez ramki.",
+    "storm": "Drugi kolor to niebo (czarny = granat), pierwszy barwi błyskawice.",
+}
 # app behavior, edited in the settings dialog; autostart lives in Task Scheduler, not here
 DEFAULT_APP = {"close_to_tray": True, "off_when_locked": False, "off_on_exit": False,
-               "start_openrgb": False, "openrgb_path": "", "fps": 30}
+               "start_openrgb": False, "openrgb_path": "", "fps": 30,
+               "schedule": [],  # [{"time": "HH:MM", "profile": name or OFF_ACTION}]
+               "lang": "pl"}
+LANGS = ("pl", "en")
+OFF_ACTION = "__off__"  # schedule entry that turns the lights off instead of applying a profile
+SCHEDULE_MAX = 20
+
+
+_lang = {"code": "pl"}  # set by the Engine from its settings
+
+
+def tr(text, **kw):
+    """Text in the UI language (Polish source, English from rgbman_i18n), then formatted."""
+    out = rgbman_i18n.EN.get(text, text) if _lang["code"] == "en" else text
+    return out.format(**kw) if kw else out
+
+
+def device_layout(d):
+    """Zones as the panel draws them: a fan ring, a strip, or a single LED dot."""
+    names = list(d.zone_names) or [d.name]
+    out = []
+    for name, n in zip(names, d.segments or [d.led_count]):
+        shape = "dot" if n == 1 else "ring" if d.kind == "motherboard" and 4 <= n <= 24 else "bar"
+        out.append({"name": name, "leds": n, "shape": shape})
+    return out
+
+
+def clean_schedule(entries):
+    """Keep well-formed {time: "HH:MM", profile} entries, sorted by time."""
+    out = []
+    for e in entries if isinstance(entries, list) else []:
+        t, prof = (e.get("time"), e.get("profile")) if isinstance(e, dict) else (None, None)
+        if isinstance(t, str) and re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", t) and isinstance(prof, str) and prof:
+            out.append({"time": t, "profile": prof})
+    return sorted(out, key=lambda e: e["time"])[:SCHEDULE_MAX]
+
+
+def due_entry(schedule, now, since):
+    """The entry whose time fell in (since, now] (datetimes); the latest one if several."""
+    hit = None
+    for e in schedule:
+        h, m = map(int, e["time"].split(":"))
+        for day in (now.date(), since.date()):  # a window can span midnight
+            at = datetime.datetime.combine(day, datetime.time(h, m))
+            if since < at <= now and (hit is None or at > hit[0]):
+                hit = (at, e)
+    return hit[1] if hit else None
 
 
 class Engine:
@@ -64,6 +123,9 @@ class Engine:
             self.settings["effect"] = "static"
         self.app = {**DEFAULT_APP, **state.get("app", {})}
         self.app["openrgb_path"] = self.app["openrgb_path"] or rgbman_win.find_openrgb()
+        self.app["schedule"] = clean_schedule(self.app["schedule"])
+        self.app["lang"] = self.app["lang"] if self.app["lang"] in LANGS else "pl"
+        _lang["code"] = self.app["lang"]
         try:  # the loop divides by it
             self.app["fps"] = min(max(int(self.app["fps"]), FPS_MIN), FPS_MAX)
         except (TypeError, ValueError):
@@ -81,8 +143,10 @@ class Engine:
         self.autostart = rgbman_win.autostart_state(APP_SCRIPT)
         self.notices = {}  # source ("openrgb", "autostart", "zone") -> problem shown in the panel
         self.stop, self.stopped = threading.Event(), threading.Event()
+        self.changed = threading.Event()  # settings, profiles or schedule changed
 
     def save_state(self):
+        self.changed.set()  # tray menu & co. refresh from their own thread
         STATE_FILE.write_text(json.dumps({"settings": self.settings, "enabled": self.enabled,
                                           "device_fx": self.device_fx, "app": self.app},
                                          indent=2), encoding="utf-8")
@@ -128,8 +192,13 @@ class Engine:
     def update_app(self, patch):
         with self.lock:
             for k, v in DEFAULT_APP.items():
-                if k in patch:
+                if k in patch and k != "schedule":
                     self.app[k] = type(v)(patch[k])
+            if "schedule" in patch:
+                self.app["schedule"] = clean_schedule(patch["schedule"])
+            if self.app["lang"] not in LANGS:
+                self.app["lang"] = "pl"
+            _lang["code"] = self.app["lang"]
             self.app["fps"] = min(max(self.app["fps"], FPS_MIN), FPS_MAX)
             if "start_openrgb" in patch or "openrgb_path" in patch:
                 self.notices.pop("openrgb", None)  # re-checked on the next scan
@@ -141,18 +210,18 @@ class Engine:
             rgbman_win.set_autostart(on, APP_SCRIPT)
             self.notices.pop("autostart", None)
         except OSError as e:
-            self.notices["autostart"] = ("Windows nie dał zgody, autostart bez zmian."
+            self.notices["autostart"] = (tr("Windows nie dał zgody, autostart bez zmian.")
                                          if e.winerror == rgbman_win.ERROR_CANCELLED else f"Autostart: {e}")
         self.autostart = rgbman_win.autostart_state(APP_SCRIPT)
 
     def set_zone_size(self, device, zone, size):
         if self.scanning:
-            raise ValueError("trwa skanowanie, spróbuj za chwilę")
+            raise ValueError(tr("trwa skanowanie, spróbuj za chwilę"))
         d = next(d for d in self.devices if d.name == device)
         z = next(z for z in d.resizable if z["name"] == zone)
         size = int(size)
         if not z["min"] <= size <= z["max"]:
-            raise ValueError(f"{zone}: dozwolone {z['min']}-{z['max']} LED")
+            raise ValueError(tr("{zone}: dozwolone {lo}-{hi} LED", zone=zone, lo=z["min"], hi=z["max"]))
         # re-read so hand edits made while the app runs aren't overwritten
         cfg = rgbman.load_json(rgbman.CONFIG_FILE, {})
         cfg.setdefault("openrgb", {}).setdefault("zone_sizes", {}).setdefault(device, {})[zone] = size
@@ -178,8 +247,8 @@ class Engine:
             self.notices.pop("openrgb", None)
             return True
         except OSError as e:
-            self.notices["openrgb"] = ("Windows nie dał zgody na uruchomienie OpenRGB."
-                                       if e.winerror == rgbman_win.ERROR_CANCELLED else f"OpenRGB: {e}")
+            self.notices["openrgb"] = (tr("Windows nie dał zgody na uruchomienie OpenRGB.")
+                                       if e.winerror == rgbman_win.ERROR_CANCELLED else f"OpenRGB: {tr(str(e))}")
             return False
 
     def rescan(self, wait=0):
@@ -193,8 +262,8 @@ class Engine:
             starting = self.ensure_openrgb()
             found = rgbman.discover(self.cfg, max(wait, 30) if starting else wait, settle=starting)
             if starting and not any(d.backend == "openrgb" for d in found) and not self._openrgb_up():
-                self.notices["openrgb"] = ("OpenRGB działa, ale serwer SDK nie odpowiada. "
-                                           "Włącz go w OpenRGB: zakładka SDK Server → Start Server.")
+                self.notices["openrgb"] = tr("OpenRGB działa, ale serwer SDK nie odpowiada. "
+                                             "Włącz go w OpenRGB: zakładka SDK Server → Start Server.")
             for d in found:
                 try:
                     d.prepare()
@@ -225,8 +294,9 @@ class Engine:
             for d in devices:
                 try:
                     d.set_leds([(0, 0, 0)] * d.led_count)
-                except Exception:
-                    pass
+                    rgbman.log(f"off: {d.name}")
+                except Exception as e:
+                    rgbman.log(f"off failed: {d.name}: {e}")
         self._close(devices)
 
     # ---- profiles (same profiles.json as the CLI)
@@ -240,6 +310,7 @@ class Engine:
             p[name] = {**{k: self.settings[k] for k in ("effect", "color", "color2", "speed", "brightness")},
                        "device": on, "device_fx": json.loads(json.dumps(self.device_fx))}
         rgbman.PROFILES_FILE.write_text(json.dumps(p, indent=2), encoding="utf-8")
+        self.changed.set()
 
     def apply_profile(self, name):
         p = self.profiles().get(name)
@@ -265,12 +336,30 @@ class Engine:
         p = self.profiles()
         p.pop(name, None)
         rgbman.PROFILES_FILE.write_text(json.dumps(p, indent=2), encoding="utf-8")
+        self.changed.set()
+
+    # ---- schedule
+    def run_schedule(self):
+        """Apply scheduled profiles. At start, catch up on the latest entry of the last
+        24 h, so a PC switched on after 22:00 still gets the 22:00 profile."""
+        last = datetime.datetime.now() - datetime.timedelta(days=1)
+        while not self.stop.wait(15):
+            now = datetime.datetime.now()
+            entry = due_entry(self.app["schedule"], now, last)
+            last = now
+            if entry and not self.stop.is_set():
+                rgbman.log(f"schedule {entry['time']}: {entry['profile']}")
+                if entry["profile"] == OFF_ACTION:
+                    self.update_settings({"power": False})
+                else:
+                    self.apply_profile(entry["profile"])
 
     # ---- render loop
     def loop(self):
         t0 = tick = time.monotonic()
         credit = {}  # device name -> frames it is owed; a device at r fps of F gets r/F per tick
         locked, lock_checked = False, 0.0
+        mode_checked, mode_error = time.monotonic(), None
         while not self.stop.is_set():
             now = time.monotonic()
             with self.lock:
@@ -286,6 +375,19 @@ class Engine:
                 was, locked = locked, off_when_locked and rgbman_win.screen_locked()
                 if locked != was:
                     pending |= {d.name for d in devices}
+            # here, not in another thread: OpenRGB devices share one client socket with the writes
+            if now - mode_checked > MODE_CHECK_S and not self.scanning:
+                mode_checked = now
+                try:
+                    fixed, changed = rgbman.restore_direct(devices)
+                    pending |= {d.name for d in fixed}  # Direct starts black: send the colors again
+                    if changed:
+                        threading.Thread(target=self.rescan, daemon=True).start()
+                    mode_error = None
+                except Exception as e:
+                    if str(e) != mode_error:  # e.g. OpenRGB closed; the writes report it per device
+                        mode_error = str(e)
+                        rgbman.log(f"OpenRGB mode check: {e}")
             c1, c2 = rgbman.parse_hex(s["color"]), rgbman.parse_hex(s["color2"])
             for d in devices:
                 fx = {**DEFAULT_DEVICE_FX, **device_fx.get(d.name, {})}
@@ -329,10 +431,15 @@ class Engine:
                 tick = time.monotonic()
         self.stopped.set()
 
-    def shutdown(self):
+    def shutdown(self, reason="quit"):
         """Stop rendering, then optionally turn everything off. Static colors otherwise stay.
-        A scan still running cleans up its own devices when it sees stop (see rescan)."""
-        self.stop.set()
+        A scan still running cleans up its own devices when it sees stop (see rescan).
+        Safe to call twice (Windows shutdown reaches us through two windows)."""
+        with self.lock:
+            if self.stop.is_set():
+                return
+            self.stop.set()
+        rgbman.log(f"shutdown ({reason}, {time.strftime('%H:%M:%S')}), lights off: {self.app['off_on_exit']}")
         self.stopped.wait(2)  # never write while the loop is mid-frame on the same socket
         with self.lock:
             devices, self.devices = list(self.devices), []
@@ -341,15 +448,28 @@ class Engine:
         while self.scanning and time.monotonic() < deadline:
             time.sleep(0.1)
 
+    @staticmethod
+    def _source_error(effect):
+        """Capture problem of the input the effect reads (system audio or the screen)."""
+        if effect in rgbman.AUDIO_EFFECTS:
+            return rgbman.AUDIO.error
+        return rgbman.SCREEN.error if effect == "ambilight" else None
+
     def snapshot(self):
         with self.lock:
             return {
                 "settings": dict(self.settings),
                 "scanning": self.scanning,
-                "effects": [{"id": k, "label": v[0], "color2": v[1], "animated": v[2],
-                             "audio": k in rgbman.AUDIO_EFFECTS}
-                            for k, v in rgbman.EFFECTS.items()],
-                "audio_error": rgbman.AUDIO.error if self.settings["effect"] in rgbman.AUDIO_EFFECTS else None,
+                "effects": [{"id": k, "label": tr(v[0]), "color2": v[1], "animated": v[2],
+                             "audio": k in rgbman.AUDIO_EFFECTS,
+                             "group": EFFECT_GROUP[k],
+                             "description": tr(rgbman.EFFECT_INFO[k]),
+                             "speed_label": tr(rgbman.SPEED_LABELS.get(k, "Prędkość")),
+                             "hint": tr(h) if (h := EFFECT_HINTS.get("audio" if k in rgbman.AUDIO_EFFECTS else k)) else None}
+                            for _, _, group in rgbman.EFFECT_GROUPS for k in group
+                            for v in [rgbman.EFFECTS[k]]],
+                "groups": [{"id": g, "label": tr(label)} for g, label, _ in rgbman.EFFECT_GROUPS],
+                "audio_error": self._source_error(self.settings["effect"]),
                 "profiles": list(self.profiles()),
                 "app": {**self.app, "autostart": self.autostart,
                         "notice": " ".join(self.notices.values()) or None},
@@ -357,12 +477,35 @@ class Engine:
                              "animated": d.max_fps > 0, "max_fps": d.max_fps,
                              "enabled": self.enabled.get(d.name, True),
                              "fx": {**DEFAULT_DEVICE_FX, **self.device_fx.get(d.name, {})},
+                             "kind": d.kind, "layout": device_layout(d),
                              "zones": list(d.resizable),
                              "preview": self.preview.get(d.name, []),
                              "error": self.errors.get(d.name)} for d in self.devices],
             }
 
 
+def _log_errors(cls):
+    """pywebview turns an exception in a js_api call into a bare rejected promise; keep
+    the traceback in rgbman.log so a "panel error" can be diagnosed afterwards."""
+    for name, fn in list(vars(cls).items()):
+        if name.startswith("_") or not callable(fn):
+            continue
+
+        def wrap(fn):
+            @functools.wraps(fn)
+            def call(*a, **k):
+                try:
+                    return fn(*a, **k)
+                except Exception:
+                    rgbman.log(f"api {fn.__name__} failed:\n{traceback.format_exc()}")
+                    raise
+            return call
+
+        setattr(cls, name, wrap(fn))
+    return cls
+
+
+@_log_errors
 class Api:
     """Methods exposed to gui.html as window.pywebview.api.*"""
 
@@ -371,6 +514,15 @@ class Api:
 
     def state(self):
         return self._engine.snapshot()
+
+    def log(self, message):
+        rgbman.log(f"panel: {str(message)[:4000]}")
+
+    def translations(self):
+        return rgbman_i18n.EN
+
+    def previews(self, color, color2, speed):
+        return rgbman.previews(rgbman.parse_hex(color), rgbman.parse_hex(color2), float(speed))
 
     def settings(self, patch):
         self._engine.update_settings(patch)
@@ -415,9 +567,9 @@ class Api:
             self._engine.set_zone_size(device, zone, size)
             notices.pop("zone", None)
         except (StopIteration, ValueError) as e:
-            notices["zone"] = f"Rozmiar strefy: {str(e) or 'urządzenie zniknęło, skanuj ponownie'}."
+            notices["zone"] = tr("Rozmiar strefy: {msg}.", msg=str(e) or tr("urządzenie zniknęło, skanuj ponownie"))
         except OSError as e:
-            notices["zone"] = f"Rozmiar strefy: nie można zapisać config.json ({e})."
+            notices["zone"] = tr("Rozmiar strefy: nie można zapisać config.json ({msg}).", msg=e)
         return self.state()
 
 
@@ -498,7 +650,7 @@ def main():
             return True
         if rgbman_win.shutting_down():  # sign-out/shutdown: refusing would block Windows
             quitting.set()
-            engine.shutdown()
+            engine.shutdown("windows")
             icon.stop()
             return True
         if engine.app["close_to_tray"]:
@@ -516,18 +668,52 @@ def main():
         show()
         window.evaluate_js("openSettings()")
 
+    def effect_item(eid):
+        return pystray.MenuItem(lambda it: tr(rgbman.EFFECTS[eid][0]),
+                                lambda i, it: engine.update_settings({"effect": eid, "power": True}),
+                                checked=lambda it: engine.settings["effect"] == eid, radio=True)
+
+    def profile_items():
+        names = list(engine.profiles())
+        if not names:
+            return [pystray.MenuItem(tr("Brak profili"), None, enabled=False)]
+        return [pystray.MenuItem(n, (lambda n: lambda i, it: engine.apply_profile(n))(n)) for n in names]
+
     icon = pystray.Icon("rgbman", tray_image(), "rgbman", pystray.Menu(
-        pystray.MenuItem("Pokaż", lambda i, it: show(), default=True),
-        pystray.MenuItem("Światła włączone", power_toggle,
+        pystray.MenuItem(lambda it: tr("Pokaż"), lambda i, it: show(), default=True),
+        pystray.MenuItem(lambda it: tr("Światła włączone"), power_toggle,
                          checked=lambda item: engine.settings["power"]),
-        pystray.MenuItem("Ustawienia", open_settings),
+        pystray.MenuItem(lambda it: tr("Efekt"), pystray.Menu(*[
+            pystray.MenuItem((lambda label: lambda it: tr(label))(label), pystray.Menu(*[effect_item(e) for e in effects]))
+            for _, label, effects in rgbman.EFFECT_GROUPS])),
+        pystray.MenuItem(lambda it: tr("Profil"), pystray.Menu(profile_items)),
+        pystray.MenuItem(lambda it: tr("Ustawienia"), open_settings),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Zakończ", quit_app),
+        pystray.MenuItem(lambda it: tr("Zakończ"), quit_app),
     ))
+
+    def tray_sync():
+        """Win32 tray menus are built ahead of time: rebuild when the panel changes things."""
+        while True:
+            engine.changed.wait()
+            engine.changed.clear()
+            try:
+                icon.title = f"rgbman: {tr(rgbman.EFFECTS[engine.settings['effect']][0])}" + (
+                    "" if engine.settings["power"] else tr(" (wyłączone)"))
+                icon.update_menu()
+            except Exception as e:
+                rgbman.log(f"tray: {e}")
+            time.sleep(0.3)  # coalesce bursts (e.g. dragging a color)
+
     threading.Thread(target=icon.run, daemon=True).start()
+    engine.changed.set()
+    threading.Thread(target=tray_sync, daemon=True).start()
+    # the hidden webview window may never be asked to close at shutdown: own hook, notified early
+    rgbman_win.on_session_end(lambda: engine.shutdown("windows"))
 
     def boot():
         engine.rescan(wait=90 if a.hidden else 5)
+        threading.Thread(target=engine.run_schedule, daemon=True).start()
         engine.loop()
 
     threading.Thread(target=boot, daemon=True).start()

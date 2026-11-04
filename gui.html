@@ -15,6 +15,9 @@
     --off: #c9cdd4;
     --accent: #00b4ff;
     --focus: #1c2027;
+    --amb-a: 13%;    /* how strongly the lights tint the window */
+    --glow-a: 45%;
+    --card: color-mix(in srgb, var(--panel) 82%, transparent);
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -26,13 +29,24 @@
       --line: #353a44;
       --off: #2f333b;
       --focus: #e7e9ed;
+      --amb-a: 24%;
+      --glow-a: 70%;
     }
   }
+  /* live colors of the lights, set from the device previews; registered so they transition */
+  @property --amb1 { syntax: "<color>"; inherits: true; initial-value: #6c7380; }
+  @property --amb2 { syntax: "<color>"; inherits: true; initial-value: #6c7380; }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
   body {
     margin: 0;
-    background: var(--bg);
+    min-height: 100vh;
+    background:
+      radial-gradient(1100px 620px at 8% -12%, color-mix(in srgb, var(--amb1) var(--amb-a), transparent), transparent 70%),
+      radial-gradient(1000px 760px at 105% 112%, color-mix(in srgb, var(--amb2) var(--amb-a), transparent), transparent 72%),
+      var(--bg);
+    background-attachment: fixed;
+    transition: --amb1 1.6s ease, --amb2 1.6s ease;
     color: var(--ink);
     font: 15px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   }
@@ -55,8 +69,13 @@
   }
   h1 {
     margin: 0;
-    font: 600 26px/1.1 "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
-    letter-spacing: -0.01em;
+    font: 700 28px/1.1 "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+    letter-spacing: -0.02em;
+    background: linear-gradient(100deg, var(--ink) 10%, color-mix(in srgb, var(--amb1) 80%, var(--ink)) 50%,
+                color-mix(in srgb, var(--amb2) 80%, var(--ink)) 95%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
   }
   .status { color: var(--muted); font-size: 13px; margin-right: auto; }
 
@@ -68,34 +87,73 @@
     color: var(--muted);
   }
 
+  .fx-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
+  .fx-tabs .fx-tab { flex: 1 1 auto; white-space: nowrap; }
+  .fx-tab {
+    position: relative; padding: 4px 8px; font-size: 13px; cursor: pointer;
+    color: var(--muted); background: transparent; border: 1px solid var(--line); border-radius: 999px;
+  }
+  .fx-tab:hover { color: var(--ink); border-color: var(--muted); }
+  .fx-tab[aria-selected="true"] { color: var(--ink); background: var(--card); border-color: var(--ink); }
+  .fx-tab.has-current::after {  /* the active effect lives in this tab */
+    content: ""; position: absolute; top: 2px; right: 2px; width: 7px; height: 7px;
+    border-radius: 50%; background: var(--accent);
+  }
   .effects { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .effect-desc { margin: 10px 0 0; font-size: 13px; }
+  /* animated preview of the effect, drawn from frames the engine renders */
+  .mini { display: flex; gap: 1px; height: 6px; margin-top: 7px; border-radius: 3px; overflow: hidden; }
+  .mini i { flex: 1; background: var(--off); }
   .effect {
-    padding: 9px 12px;
+    display: block;
+    padding: 8px 12px 9px;
     text-align: left;
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: 6px;
     cursor: pointer;
   }
+  .effect { transition: transform .12s ease, border-color .12s ease, box-shadow .2s ease; }
+  .effect:hover { transform: translateY(-1px); }
   .effect[aria-pressed="true"] {
     border-color: var(--accent);
-    box-shadow: inset 3px 0 0 var(--accent);
+    box-shadow: inset 3px 0 0 var(--accent), 0 0 22px -6px var(--accent);
   }
+  .effect[aria-pressed="true"] .mini { height: 8px; box-shadow: 0 0 14px -3px var(--accent); }
 
-  .color-row { display: flex; gap: 10px; align-items: center; }
   input[type=color] {
     width: 52px; height: 40px; padding: 0;
     border: 1px solid var(--line); border-radius: 6px; background: none; cursor: pointer;
   }
-  .hex {
-    width: 100px; padding: 8px 10px;
-    background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
-    font-variant-numeric: tabular-nums;
+  .color-targets { display: grid; grid-template-columns: 1fr auto 1fr; gap: 6px; }
+  .color-target {
+    min-width: 0; display: flex; align-items: center; gap: 8px; padding: 6px 8px; cursor: pointer;
+    background: var(--card); border: 1px solid var(--line); border-radius: 8px;
   }
-  .swatches { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  .color-target:hover { border-color: var(--muted); }
+  .color-target[aria-pressed="true"] { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+  .chip { flex: none; width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--line); }
+  .target-text { display: flex; flex-direction: column; min-width: 0; font-size: 13px; line-height: 1.25; }
+  .target-hex {
+    width: 100%; padding: 0; border: 0; background: transparent; outline: none;
+    font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums;
+  }
+  .target-hex:focus { color: var(--ink); }
+  .color-target:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .swap { padding: 0 10px; font-size: 16px; }
+  .swatches { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
   .swatch {
-    width: 28px; height: 28px; border-radius: 50%;
+    flex: none; width: 24px; height: 24px; border-radius: 50%;
     border: 1px solid var(--line); cursor: pointer; padding: 0;
+  }
+  .swatch.custom {  /* any other color: opens the system picker */
+    position: relative; overflow: hidden;
+    background: conic-gradient(#f33, #fd0, #3e6, #0cf, #36f, #c3f, #f33);
+  }
+  .swatch.custom input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; border: 0; cursor: pointer; }
+  .swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--ink); }
+  .swatch.none {  /* black = "no color": drawn crossed out so it shows on a dark theme */
+    background: linear-gradient(135deg, transparent 44%, var(--muted) 44% 56%, transparent 56%), #000 !important;
   }
 
   .slider label { display: flex; justify-content: space-between; font-size: 13px; color: var(--muted); }
@@ -117,15 +175,16 @@
 
   .devices { display: flex; flex-direction: column; gap: 12px; }
   .device {
-    background: var(--panel);
+    background: var(--card);
     border: 1px solid var(--line);
-    border-radius: 10px;
+    border-radius: 12px;
     padding: 14px 16px 16px;
+    backdrop-filter: blur(10px);
   }
   .device-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
   .device-name { font-weight: 600; }
   .device-meta { color: var(--muted); font-size: 13px; margin-right: auto; }
-  .device.off .strip { opacity: 0.25; }
+  .device.off .viz { opacity: 0.25; }
   .btn.small { padding: 4px 10px; font-size: 13px; }
   .fx-toggle.active { border-color: var(--accent); }
   .fx-panel {
@@ -143,23 +202,38 @@
   .fx-color-field input[type=color] { width: 100%; height: 36px; }
   .fx-color-field input[type=color]:disabled { opacity: .4; cursor: default; }
   .fx-lead-label { display: flex; justify-content: space-between; }
+  .sched-row { display: flex; gap: 8px; align-items: center; }
+  .sched-row select { flex: 1; min-width: 0; }
+  .sched-row input[type=time] { padding: 7px 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+  #schedule-add { align-self: flex-start; }
   .error { color: #c4314b; font-size: 13px; margin-top: 8px; }
   .hint { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
   header { flex-wrap: wrap; }
   .app-notice { flex-basis: 100%; margin: 0; }
   .group .error { margin-bottom: 0; }
 
-  /* the live light strip: the one loud thing on the page */
-  .strip {
-    display: flex;
-    height: 34px;
-    border-radius: 5px;
-    overflow: hidden;
-    gap: 2px;
-    transition: opacity .2s;
+  /* the devices as they look: the loud part of the page */
+  .viz { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px 26px; transition: opacity .2s; }
+  .zone-viz { display: flex; flex-direction: column; align-items: center; gap: 7px; }
+  .zone-viz.bar { flex: 1 1 100%; align-items: stretch; }
+  .zone-viz small { font-size: 12px; color: var(--muted); }
+  .leds { display: flex; gap: 3px; }
+  .leds i { background: var(--c, var(--off)); transition: background .12s linear, box-shadow .12s linear; }
+  .leds i.lit {
+    box-shadow: 0 0 12px 1px color-mix(in srgb, var(--c) var(--glow-a), transparent), 0 0 2px var(--c);
   }
-  .led { flex: 1; background: var(--off); }
-  .strip.lit { filter: drop-shadow(0 6px 14px var(--glow, transparent)); }
+  .bar .leds { height: 18px; }
+  .bar .leds i { flex: 1; border-radius: 4px; }
+  .ring .leds { position: relative; display: block; width: 76px; height: 76px; }
+  .ring .leds::after {  /* the fan hub */
+    content: ""; position: absolute; inset: 24px; border-radius: 50%;
+    border: 1px solid var(--line); background: color-mix(in srgb, var(--off) 50%, transparent);
+  }
+  .ring .leds i {
+    position: absolute; left: 33px; top: 33px; width: 10px; height: 10px; border-radius: 50%;
+    transform: rotate(calc(var(--k) * 1turn / var(--n))) translateY(-29px);
+  }
+  .dot .leds i { width: 24px; height: 24px; border-radius: 50%; }
 
   .switch { position: relative; width: 40px; height: 22px; flex: none; }
   .switch input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
@@ -227,25 +301,34 @@
   <aside class="controls">
     <section class="group">
       <h2>Efekt</h2>
-      <div class="effects" id="effects"></div>
-      <p class="hint" id="audio-hint" hidden>Reaguje na dźwięk z domyślnego wyjścia audio Windows.</p>
+      <!-- one group at a time: the list stays short however many effects there are -->
+      <div class="fx-tabs" id="fx-tabs" role="tablist"></div>
+      <div id="effects"></div>
+      <p class="effect-desc" id="effect-desc"></p>
+      <p class="hint" id="audio-hint" hidden></p>
       <p class="error" id="audio-error" hidden></p>
     </section>
 
     <section class="group">
-      <h2>Kolor</h2>
-      <div class="color-row">
-        <input type="color" id="picker" aria-label="Wybierz kolor">
-        <input class="hex" id="hex" maxlength="7" spellcheck="false" aria-label="Kolor w zapisie HEX">
+      <h2>Kolory</h2>
+      <!-- the palette and the custom picker edit the selected color; each HEX field its own -->
+      <div class="color-targets">
+        <div class="color-target" data-target="color" aria-pressed="true">
+          <span class="chip"></span>
+          <span class="target-text"><span>Główny</span>
+            <input class="target-hex" maxlength="7" spellcheck="false" aria-label="Kolor w zapisie HEX"></span>
+        </div>
+        <button type="button" class="btn swap" id="swap-colors" title="Zamień kolory" aria-label="Zamień kolory">⇄</button>
+        <div class="color-target" data-target="color2" aria-pressed="false">
+          <span class="chip"></span>
+          <span class="target-text"><span>Drugi</span>
+            <input class="target-hex" maxlength="7" spellcheck="false" aria-label="Drugi kolor w zapisie HEX"></span>
+        </div>
       </div>
-      <div class="swatches" id="swatches"></div>
-    </section>
-
-    <section class="group" id="color2-group">
-      <h2>Drugi kolor</h2>
-      <div class="color-row">
-        <input type="color" id="picker2" aria-label="Wybierz drugi kolor">
-        <input class="hex" id="hex2" maxlength="7" spellcheck="false" aria-label="Drugi kolor w zapisie HEX">
+      <div class="swatches" id="swatches">
+        <label class="swatch custom" id="custom-swatch" title="Wybierz kolor">
+          <input type="color" id="picker" aria-label="Wybierz kolor">
+        </label>
       </div>
     </section>
 
@@ -283,6 +366,16 @@
       <button class="btn primary" value="close">Gotowe</button>
     </div>
     <p class="error" id="notice" role="status" hidden></p>
+
+    <section class="group">
+      <label class="opt">
+        <span>Język</span>
+        <select id="opt-lang" aria-label="Język / Language">
+          <option value="pl">Polski</option>
+          <option value="en">English</option>
+        </select>
+      </label>
+    </section>
 
     <section class="group">
       <h3>Uruchamianie</h3>
@@ -339,6 +432,13 @@
       </label>
     </section>
 
+    <section class="group">
+      <h3>Harmonogram</h3>
+      <p class="hint">Codziennie o podanej godzinie rgbman włącza wybrany profil. Jeśli komputer był wtedy wyłączony, po starcie włącza ostatni zaplanowany.</p>
+      <div class="group" id="schedule"></div>
+      <button type="button" class="btn" id="schedule-add">Dodaj godzinę</button>
+    </section>
+
     <section class="group" id="zones-group">
       <h3>Złącza ARGB</h3>
       <p class="hint">Liczba LED-ów podłączonych do złącza. Wentylatory na rozgałęźniku liczysz raz, bo każdy dostaje ten sam sygnał.</p>
@@ -348,7 +448,10 @@
 </dialog>
 
 <script>
-const SWATCHES = ["ff0040", "ff7a00", "ffd400", "00e676", "00b4ff", "6c4bff", "ff3df2", "ffffff"];
+const SWATCHES = ["ff0033", "ff6a00", "ffb300", "ffe600", "9dff00", "00e676", "00e5c3",
+                  "00b4ff", "2962ff", "6c4bff", "c13dff", "ff3df2", "ffffff", "000000"];
+let colorTarget = "color";  // which color ("color" or "color2") the palette and picker edit
+let effectTab = null, shownEffect = null;  // effect group on show; follows the effect when it changes
 const BACKENDS = { openrgb: "OpenRGB", rivalcfg: "rivalcfg", hid: "HID" };
 
 const $ = (id) => document.getElementById(id);
@@ -358,6 +461,37 @@ let rendered = new Map();
 let effectsById = {};
 
 const call = (fn, ...args) => window.pywebview.api[fn](...args);
+
+// ---- language: Polish is the source text, English comes from rgbman_i18n.py
+let lang = "pl", dict = null, langSwitching = false;
+const t = (s) => (lang === "en" && dict && dict[s]) || s;
+const ORIG_TEXT = new WeakMap();  // text node -> its Polish original, to switch back
+function translateDom(root = document.body) {
+  const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+    if (n.parentElement.closest("script, style")) continue;
+    if (!ORIG_TEXT.has(n)) {
+      if (!n.nodeValue.trim()) continue;
+      ORIG_TEXT.set(n, n.nodeValue);
+    }
+    const orig = ORIG_TEXT.get(n), key = orig.trim();
+    n.nodeValue = orig.replace(key, t(key));
+  }
+  root.querySelectorAll("[aria-label], [title]").forEach((el) => {
+    for (const a of ["aria-label", "title"]) {
+      if (!el.hasAttribute(a)) continue;
+      const k = "i18n" + a.replace("-", "");
+      el.dataset[k] ??= el.getAttribute(a);
+      el.setAttribute(a, t(el.dataset[k]));
+    }
+  });
+}
+async function setLang(code) {
+  if (code === "en" && !dict) dict = await call("translations");
+  lang = code;
+  document.documentElement.lang = code;
+  translateDom();
+}
 
 let pushTimer = null, pending = {};
 function push(patch) {
@@ -375,43 +509,107 @@ function push(patch) {
 function syncControls() {
   const hex = "#" + settings.color;
   document.documentElement.style.setProperty("--accent", hex);
-  $("picker").value = hex;
-  if (document.activeElement !== $("hex")) $("hex").value = hex;
-  $("picker2").value = "#" + settings.color2;
-  if (document.activeElement !== $("hex2")) $("hex2").value = "#" + settings.color2;
   const fx = effectsById[settings.effect] || {};
-  $("color2-group").hidden = !fx.color2;
+  if (!fx.color2) colorTarget = "color";  // this effect has no second color
+  const cur = settings[colorTarget];
+  $("picker").value = "#" + cur;
+  document.querySelectorAll(".color-target").forEach((b) => {
+    const k = b.dataset.target, input = b.querySelector(".target-hex");
+    b.hidden = k === "color2" && !fx.color2;
+    b.setAttribute("aria-pressed", k === colorTarget);
+    b.querySelector(".chip").style.background = "#" + settings[k];
+    if (document.activeElement !== input) input.value = "#" + settings[k];
+  });
+  $("swap-colors").hidden = !fx.color2;
+  document.querySelectorAll(".swatch[data-c]").forEach((sw) => sw.setAttribute("aria-pressed", sw.dataset.c === cur));
+  $("custom-swatch").setAttribute("aria-pressed", !SWATCHES.includes(cur));
+  if (settings.effect !== shownEffect) {  // picked here, from the tray or a profile: show its group
+    shownEffect = settings.effect;
+    effectTab = fx.group || effectTab;
+  }
+  document.querySelectorAll(".fx-tab").forEach((tab) => {
+    tab.setAttribute("aria-selected", tab.dataset.group === effectTab);
+    tab.classList.toggle("has-current", tab.dataset.group === fx.group);
+  });
+  document.querySelectorAll("#effects > section").forEach((sec) => { sec.hidden = sec.dataset.group !== effectTab; });
   $("speed").value = settings.speed;
   $("speed-val").textContent = settings.speed.toFixed(1) + "×";
   $("brightness").value = Math.round(settings.brightness * 100);
   $("brightness-val").textContent = Math.round(settings.brightness * 100) + "%";
   $("speed-group").hidden = !fx.animated;
-  $("speed-label").textContent = fx.audio ? "Czułość" : "Prędkość";
-  $("audio-hint").hidden = !fx.audio;
-  $("power").textContent = settings.power ? "Wyłącz światła" : "Włącz światła";
+  $("speed-label").textContent = fx.speed_label || "Prędkość";
+  $("audio-hint").hidden = !fx.hint;
+  $("audio-hint").textContent = fx.hint || "";
+  $("effect-desc").textContent = fx.description || "";
+  schedulePreviews();
+  $("power").textContent = t(settings.power ? "Wyłącz światła" : "Włącz światła");
   document.querySelectorAll(".effect").forEach((b) =>
     b.setAttribute("aria-pressed", b.dataset.effect === settings.effect));
 }
 
-function buildStatic(effects) {
+// ---- effect previews: the engine renders a short loop per effect, we play it back
+const PREVIEW_LEDS = 10, PREVIEW_FPS = 12;
+let previewFrames = {}, previewKey = "", previewTimer = null, previewTick = 0;
+function schedulePreviews() {
+  const key = [settings.color, settings.color2, settings.speed].join("|");
+  if (key === previewKey) return;
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(() => {  // colors are dragged: wait until they settle
+    previewKey = key;
+    call("previews", settings.color, settings.color2, settings.speed)
+      .then((p) => { previewFrames = p; drawPreviews(); }).catch(() => { previewKey = ""; });
+  }, 300);
+}
+function drawPreviews() {
+  document.querySelectorAll(".effect").forEach((b) => {
+    const seq = previewFrames[b.dataset.effect];
+    if (!seq) return;
+    const leds = seq[previewTick % seq.length], cells = b.querySelector(".mini").children;
+    for (let i = 0; i < cells.length; i++) cells[i].style.background = "#" + leds[i];
+  });
+}
+if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  setInterval(() => { previewTick++; if (!document.hidden) drawPreviews(); }, 1000 / PREVIEW_FPS);
+}
+
+function buildStatic(effects, groups) {
   $("effects").innerHTML = "";
-  for (const e of effects) {
-    effectsById[e.id] = e;
-    const b = document.createElement("button");
-    b.className = "effect";
-    b.dataset.effect = e.id;
-    b.textContent = e.label;
-    b.onclick = () => push({ effect: e.id });
-    $("effects").append(b);
+  $("fx-tabs").innerHTML = "";
+  for (const g of groups) {
+    const tab = document.createElement("button");
+    tab.className = "fx-tab";
+    tab.dataset.group = g.id;
+    tab.setAttribute("role", "tab");
+    tab.textContent = g.label;
+    tab.onclick = () => { effectTab = g.id; syncControls(); };
+    $("fx-tabs").append(tab);
+    const sec = document.createElement("section");
+    sec.dataset.group = g.id;
+    sec.setAttribute("role", "tabpanel");
+    sec.innerHTML = `<div class="effects"></div>`;
+    $("effects").append(sec);
+    for (const e of effects.filter((x) => x.group === g.id)) {
+      effectsById[e.id] = e;
+      const b = document.createElement("button");
+      b.className = "effect";
+      b.dataset.effect = e.id;
+      b.title = e.description;
+      b.innerHTML = `<span class="effect-label"></span><span class="mini" aria-hidden="true">${"<i></i>".repeat(PREVIEW_LEDS)}</span>`;
+      b.querySelector(".effect-label").textContent = e.label;
+      b.onclick = () => push({ effect: e.id });
+      sec.querySelector(".effects").append(b);
+    }
   }
-  $("swatches").innerHTML = "";
+  $("swatches").querySelectorAll(".swatch[data-c]").forEach((sw) => sw.remove());
   for (const c of SWATCHES) {
     const s = document.createElement("button");
-    s.className = "swatch";
+    s.className = c === "000000" ? "swatch none" : "swatch";
+    s.dataset.c = c;
     s.style.background = "#" + c;
-    s.setAttribute("aria-label", "Kolor #" + c);
-    s.onclick = () => push({ color: c });
-    $("swatches").append(s);
+    s.setAttribute("aria-label", c === "000000" ? t("Czarny (brak)") : t("Kolor #") + c);
+    s.title = s.getAttribute("aria-label");
+    s.onclick = () => push({ [colorTarget]: c });
+    $("swatches").insertBefore(s, $("custom-swatch"));
   }
 }
 
@@ -423,7 +621,7 @@ function renderProfiles(names) {
   sel.dataset.key = key;
   sel.innerHTML = names.length
     ? names.map((n) => `<option>${escapeHtml(n)}</option>`).join("")
-    : `<option value="">Brak profili</option>`;
+    : `<option value="">${t("Brak profili")}</option>`;
   if (names.includes(current)) sel.value = current;
   $("apply").disabled = $("delete").disabled = !names.length;
 }
@@ -433,8 +631,8 @@ function renderDevices(devices, scanning) {
   if (!devices.length) {
     rendered.clear();
     root.innerHTML = `<div class="device empty">${scanning
-      ? "Szukam urządzeń…"
-      : "Nie widzę żadnych urządzeń. Sprawdź, czy serwer OpenRGB działa, i kliknij „Skanuj ponownie”."}</div>`;
+      ? t("Szukam urządzeń…")
+      : t("Nie widzę żadnych urządzeń. Sprawdź, czy serwer OpenRGB działa, i kliknij „Skanuj ponownie”.")}</div>`;
     return;
   }
   const names = devices.map((d) => d.name).join("\n");
@@ -452,7 +650,7 @@ function renderDevices(devices, scanning) {
           <button class="btn small fx-toggle" aria-expanded="false">Dostosuj</button>
           <label class="switch"><input type="checkbox" class="power-switch"><span></span></label>
         </div>
-        <div class="strip"></div>
+        <div class="viz"></div>
         <div class="fx-panel" hidden>
           <label class="fx-anim">Efekt<select class="fx-effect"></select></label>
           <div class="fx-color-field">
@@ -472,39 +670,75 @@ function renderDevices(devices, scanning) {
         <div class="error" hidden></div>`;
       el.querySelector(".device-name").textContent = d.name;
       const input = el.querySelector(".power-switch");
-      input.setAttribute("aria-label", "Podświetlenie: " + d.name);
+      input.setAttribute("aria-label", t("Podświetlenie: ") + d.name);
       input.onchange = () => call("device", d.name, input.checked).catch(showOffline);
+      translateDom(el);
       wireDeviceFx(el, d.name);
       root.append(el);
       rendered.set(d.name, el);
     }
   }
+  const shown = [];
   for (const d of devices) {
     const el = rendered.get(d.name);
     el.classList.toggle("off", !d.enabled || !settings.power);
     el.querySelector(".power-switch").checked = d.enabled;
-    const leds = d.leds === 1 ? "1 LED" : `${d.leds} LED`;
+    const leds = lang === "en" ? `${d.leds} LED${d.leds === 1 ? "" : "s"}` : `${d.leds} LED`;
     el.querySelector(".device-meta").textContent =
-      `${BACKENDS[d.backend] || d.backend}, ${leds}${d.animated ? "" : ", tylko kolor statyczny"}${fxSummary(d)}`;
+      `${BACKENDS[d.backend] || d.backend}, ${leds}${d.animated ? "" : t(", tylko kolor statyczny")}${fxSummary(d)}`;
     syncDeviceFx(el, d);
     const err = el.querySelector(".error");
     err.hidden = !d.error;
-    err.textContent = d.error ? "Błąd: " + d.error : "";
+    err.textContent = d.error ? t("Błąd: ") + d.error : "";
 
-    const strip = el.querySelector(".strip");
-    const preview = d.preview.length ? d.preview : ["000000"];
-    if (strip.children.length !== preview.length) {
-      strip.innerHTML = preview.map(() => `<div class="led"></div>`).join("");
-    }
-    let lit = false;
-    preview.forEach((c, i) => {
-      const dark = c === "000000";
-      strip.children[i].style.background = "#" + c;
-      lit ||= !dark;
-    });
-    strip.classList.toggle("lit", lit);
-    strip.style.setProperty("--glow", "#" + preview[Math.floor(preview.length / 2)] + "66");
+    if (d.enabled && settings.power) shown.push(...drawDevice(el, d));
+    else drawDevice(el, d);
   }
+  setAmbient(shown);
+}
+
+// zones need every LED's color; a device with more than the engine sends is one strip
+function drawDevice(el, d) {
+  const viz = el.querySelector(".viz");
+  const colors = d.preview.length ? d.preview : ["000000"];
+  const layout = colors.length === d.leds ? d.layout : [{ name: "", leds: colors.length, shape: "bar" }];
+  const key = JSON.stringify(layout);
+  if (viz.dataset.key !== key) {
+    viz.dataset.key = key;
+    viz.innerHTML = layout.map((z) => {
+      const cells = Array.from({ length: z.leds }, (_, k) => `<i style="--k:${k}"></i>`).join("");
+      const label = z.name ? `<small>${escapeHtml(z.name)}${z.leds > 1 ? ` · ${z.leds}` : ""}</small>` : "";
+      return `<div class="zone-viz ${z.shape}"><div class="leds" style="--n:${z.leds}">${cells}</div>${label}</div>`;
+    }).join("");
+    el.cells = [...viz.querySelectorAll(".leds i")];
+  }
+  el.cells.forEach((cell, i) => {
+    const hex = colors[i] || "000000";
+    const lit = parseInt(hex.slice(0, 2), 16) + parseInt(hex.slice(2, 4), 16) + parseInt(hex.slice(4), 16) > 24;
+    if (lit) cell.style.setProperty("--c", "#" + hex);
+    else cell.style.removeProperty("--c");
+    cell.classList.toggle("lit", lit);
+  });
+  return colors;
+}
+
+// tint the window with what the lights show: first half of all LEDs left, second half right
+function setAmbient(hexes) {
+  const lit = hexes.map((h) => [0, 2, 4].map((k) => parseInt(h.slice(k, k + 2), 16))).filter((c) => c[0] + c[1] + c[2] > 24);
+  const root = document.documentElement.style;
+  if (!lit.length) {
+    root.setProperty("--amb1", "#" + settings.color);
+    root.setProperty("--amb2", "#" + (settings.color2 === "000000" ? settings.color : settings.color2));
+    return;
+  }
+  const avg = (cs) => {
+    const sum = cs.reduce((a, c) => a.map((v, k) => v + c[k]), [0, 0, 0]);
+    const max = Math.max(...sum) || 1;  // keep the hue, drop the dimness: averages turn muddy otherwise
+    return "#" + sum.map((v) => Math.round((v / max) * 255).toString(16).padStart(2, "0")).join("");
+  };
+  const half = Math.ceil(lit.length / 2);
+  root.setProperty("--amb1", avg(lit.slice(0, half)));
+  root.setProperty("--amb2", avg(lit.slice(half).length ? lit.slice(half) : lit));
 }
 
 // ---- per-device overrides ("Dostosuj")
@@ -513,10 +747,10 @@ const openFx = new Set();
 function fxSummary(d) {
   const f = d.fx, parts = [];
   if (f.effect) parts.push(effectsById[f.effect]?.label || f.effect);
-  if (f.color) parts.push("własny kolor");
-  if (f.layout === "uniform") parts.push("jeden kolor");
+  if (f.color) parts.push(t("własny kolor"));
+  if (f.layout === "uniform") parts.push(t("jeden kolor"));
   if (f.lead_ms) parts.push(`+${f.lead_ms} ms`);
-  if (f.max_fps) parts.push(`max ${f.max_fps} kl./s`);
+  if (f.max_fps) parts.push(`max ${f.max_fps} ${t("kl./s")}`);
   return parts.length ? ` · ${parts.join(", ")}` : "";
 }
 
@@ -525,7 +759,7 @@ const FPS_STEPS = [5, 10, 15, 20, 30, 45, 60];
 function wireDeviceFx(el, name) {
   const q = (s) => el.querySelector(s);
   const send = (patch) => call("device_fx", name, patch).then(render).catch(showOffline);
-  q(".fx-effect").innerHTML = `<option value="">Jak wszystkie</option>` + Object.values(effectsById)
+  q(".fx-effect").innerHTML = `<option value="">${t("Jak wszystkie")}</option>` + Object.values(effectsById)
     .map((e) => `<option value="${e.id}">${escapeHtml(e.label)}</option>`).join("");
   q(".fx-toggle").onclick = () => {
     const open = !openFx.has(name);
@@ -569,10 +803,10 @@ function syncDeviceFx(el, d) {
   if (idle(fpsSel)) {
     // "Auto" = the device's own limit, capped by the global setting
     const auto = Math.min(d.max_fps, lastState?.app.fps ?? d.max_fps);
-    const key = `${auto}`;
+    const key = `${auto}|${lang}`;
     if (fpsSel.dataset.key !== key) {
       fpsSel.dataset.key = key;
-      fpsSel.innerHTML = `<option value="0">Auto (${auto})</option>` +
+      fpsSel.innerHTML = `<option value="0">${t("Auto")} (${auto})</option>` +
         FPS_STEPS.map((n) => `<option value="${n}">${n}</option>`).join("");
     }
     fpsSel.value = String(f.max_fps);
@@ -597,16 +831,55 @@ function renderSettings(state) {
   const auto = $("opt-autostart");
   if (!auto.dataset.busy) {
     auto.checked = app.autostart === "on";
-    $("autostart-help").textContent = AUTOSTART_HELP[app.autostart];
+    $("autostart-help").textContent = t(AUTOSTART_HELP[app.autostart]);
   }
   document.querySelectorAll("#settings [data-app]").forEach((i) => { i.checked = app[i.dataset.app]; });
   if (document.activeElement !== $("opt-fps")) $("opt-fps").value = String(app.fps);
+  if (document.activeElement !== $("opt-lang")) $("opt-lang").value = app.lang;
   const path = $("opt-openrgb_path");
   if (document.activeElement !== path) path.value = app.openrgb_path;
   path.hidden = !app.start_openrgb;
   $("notice").hidden = !app.notice;
   $("notice").textContent = app.notice || "";
   renderZones(state.devices);
+  renderSchedule(state);
+}
+
+const OFF_ACTION = "__off__";
+
+function renderSchedule(state) {
+  const root = $("schedule");
+  const rows = state.app.schedule, profiles = state.profiles;
+  const key = JSON.stringify([rows, profiles]);
+  if (root.dataset.key === key || root.contains(document.activeElement)) return;
+  root.dataset.key = key;
+  root.innerHTML = rows.length ? "" : `<p class="hint">${t("Brak zaplanowanych zmian.")}</p>`;
+  rows.forEach((r, k) => {
+    const row = document.createElement("div");
+    row.className = "sched-row";
+    row.innerHTML = `<input type="time" class="sched-time" aria-label="Godzina">
+      <select class="sched-profile" aria-label="Co włączyć"></select>
+      <button type="button" class="btn small sched-del">Usuń</button>`;
+    row.querySelector(".sched-time").value = r.time;
+    const sel = row.querySelector(".sched-profile");
+    const names = profiles.includes(r.profile) || r.profile === OFF_ACTION ? profiles : [...profiles, r.profile];
+    sel.innerHTML = `<option value="${OFF_ACTION}">${t("Wyłącz światła")}</option>` +
+      names.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(profiles.includes(n) ? n : n + t(" (usunięty)"))}</option>`).join("");
+    translateDom(row);
+    sel.value = r.profile;
+    row.querySelector(".sched-time").onchange = saveSchedule;
+    sel.onchange = saveSchedule;
+    row.querySelector(".sched-del").onclick = () => { row.remove(); saveSchedule(); };
+    root.append(row);
+  });
+}
+
+function saveSchedule() {
+  const rows = [...document.querySelectorAll("#schedule .sched-row")]
+    .map((r) => ({ time: r.querySelector(".sched-time").value, profile: r.querySelector(".sched-profile").value }))
+    .filter((r) => r.time);
+  $("schedule").dataset.key = "";
+  call("app_settings", { schedule: rows }).then(render).catch(showOffline);
 }
 
 function renderZones(devices) {
@@ -634,7 +907,7 @@ function renderZones(devices) {
       const rebuild = () => { root.dataset.key = ""; };  // even if the size was refused
       call("zone_size", z.dev, z.name, n)
         .then((s) => { rebuild(); render(s); })
-        .catch(() => { rebuild(); if (lastState) renderZones(lastState.devices); showOffline(); });
+        .catch((err) => { rebuild(); if (lastState) renderZones(lastState.devices); showOffline(err); });
     };
     root.append(row);
   });
@@ -642,6 +915,16 @@ function renderZones(devices) {
 
 function render(state) {
   lastState = state;
+  if (state.app.lang !== lang && !langSwitching) {
+    langSwitching = true;  // effect names come translated in state; rebuild what was built once
+    setLang(state.app.lang).then(() => {
+      buildStatic(state.effects, state.groups);
+      for (const id of ["devices", "schedule", "zones", "profile-list"]) $(id).dataset.key = "";
+      previewKey = "";
+      syncControls();
+      if (lastState) render(lastState);
+    }).finally(() => { langSwitching = false; });
+  }
   // power can also be flipped from the tray menu; adopt it unless we have an unsent change
   if (settings && !pushTimer && !("power" in pending) && settings.power !== state.settings.power) {
     settings.power = state.settings.power;
@@ -653,14 +936,25 @@ function render(state) {
   renderProfiles(state.profiles);
   renderDevices(state.devices, state.scanning);
   $("audio-error").hidden = !state.audio_error;
-  $("audio-error").textContent = state.audio_error ? "Błąd dźwięku: " + state.audio_error : "";
+  $("audio-error").textContent = state.audio_error ? t("Błąd przechwytywania: ") + state.audio_error : "";
   const n = state.devices.length;
-  $("status").textContent = state.scanning ? "Skanowanie…"
+  $("status").textContent = state.scanning ? t("Skanowanie…")
+    : lang === "en" ? `${n} device${n === 1 ? "" : "s"}`
     : n === 1 ? "1 urządzenie" : n >= 2 && n <= 4 ? `${n} urządzenia` : `${n} urządzeń`;
 }
 
-function showOffline() {
-  $("status").textContent = "Brak połączenia z silnikiem rgbman. Uruchom program ponownie.";
+// one handler for every failed call and render error: show what actually broke, log it once
+let lastLogged = "";
+function showOffline(err) {
+  const msg = err ? String(err.message || err) : "";
+  $("status").textContent = msg
+    ? t("Błąd panelu: ") + msg
+    : t("Brak połączenia z silnikiem rgbman. Uruchom program ponownie.");
+  const detail = err && (err.stack || msg);
+  if (detail && detail !== lastLogged && window.pywebview?.api?.log) {
+    lastLogged = detail;
+    window.pywebview.api.log(detail).catch(() => {});
+  }
 }
 
 function escapeHtml(s) {
@@ -668,18 +962,19 @@ function escapeHtml(s) {
 }
 
 // ---- wiring
-$("picker").oninput = (e) => push({ color: e.target.value.slice(1) });
-$("hex").oninput = (e) => {
-  const v = e.target.value.trim().replace(/^#/, "");
-  if (/^[0-9a-f]{6}$/i.test(v)) push({ color: v.toLowerCase() });
-};
-$("hex").onblur = syncControls;
-$("picker2").oninput = (e) => push({ color2: e.target.value.slice(1) });
-$("hex2").oninput = (e) => {
-  const v = e.target.value.trim().replace(/^#/, "");
-  if (/^[0-9a-f]{6}$/i.test(v)) push({ color2: v.toLowerCase() });
-};
-$("hex2").onblur = syncControls;
+$("picker").oninput = (e) => push({ [colorTarget]: e.target.value.slice(1) });
+document.querySelectorAll(".color-target").forEach((b) => {
+  const k = b.dataset.target, input = b.querySelector(".target-hex");
+  const select = () => { if (colorTarget !== k) { colorTarget = k; syncControls(); } };
+  b.onclick = select;
+  input.onfocus = select;
+  input.oninput = () => {
+    const v = input.value.trim().replace(/^#/, "");
+    if (/^[0-9a-f]{6}$/i.test(v)) push({ [k]: v.toLowerCase() });
+  };
+  input.onblur = syncControls;
+});
+$("swap-colors").onclick = () => push({ color: settings.color2, color2: settings.color });
 $("speed").oninput = (e) => push({ speed: parseFloat(e.target.value) });
 $("brightness").oninput = (e) => push({ brightness: parseInt(e.target.value, 10) / 100 });
 $("power").onclick = () => push({ power: !settings.power });
@@ -688,6 +983,14 @@ $("open-settings").onclick = openSettings;
 document.querySelectorAll("#settings [data-app]").forEach((i) => {
   i.onchange = () => call("app_settings", { [i.dataset.app]: i.checked }).then(render).catch(showOffline);
 });
+$("schedule-add").onclick = () => {
+  const rows = lastState ? [...lastState.app.schedule] : [];
+  rows.push({ time: "22:00", profile: lastState?.profiles[0] ?? OFF_ACTION });
+  $("schedule").dataset.key = "";
+  call("app_settings", { schedule: rows }).then(render).catch(showOffline);
+};
+$("opt-lang").onchange = (e) =>
+  call("app_settings", { lang: e.target.value }).then(render).catch(showOffline);
 $("opt-fps").onchange = (e) =>
   call("app_settings", { fps: parseInt(e.target.value, 10) }).then(render).catch(showOffline);
 $("opt-openrgb_path").onchange = (e) =>
@@ -696,8 +999,8 @@ $("opt-autostart").onchange = async (e) => {
   const box = e.target;
   box.dataset.busy = "1";
   box.disabled = true;
-  $("autostart-help").textContent = "Czekam na zgodę Windows…";
-  try { render(await call("autostart", box.checked)); } catch { showOffline(); }
+  $("autostart-help").textContent = t("Czekam na zgodę Windows…");
+  try { render(await call("autostart", box.checked)); } catch (err) { showOffline(err); }
   delete box.dataset.busy;
   box.disabled = false;
   if (lastState) renderSettings(lastState);
@@ -726,7 +1029,7 @@ $("apply").onclick = async () => {
 };
 $("delete").onclick = async () => {
   const name = $("profile-list").value;
-  if (name && confirm(`Usunąć profil „${name}”?`)) {
+  if (name && confirm(t("Usunąć profil „{name}”?").replace("{name}", name))) {
     const state = await call("profile_delete", name).catch(showOffline);
     if (state) render(state);
   }
@@ -736,14 +1039,15 @@ async function start() {
   try {
     const state = await call("state");
     settings = { ...state.settings };
-    buildStatic(state.effects);
+    await setLang(state.app.lang);
+    buildStatic(state.effects, state.groups);
     syncControls();
     render(state);
-  } catch { showOffline(); setTimeout(start, 2000); return; }
+  } catch (err) { showOffline(err); setTimeout(start, 2000); return; }
 
   async function poll() {
     try { render(await call("state")); }
-    catch { showOffline(); }
+    catch (err) { showOffline(err); }
     setTimeout(poll, 120);
   }
   poll();

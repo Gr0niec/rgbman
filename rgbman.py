@@ -39,12 +39,48 @@ EFFECTS = {
     "chase": ("Pościg", True, True),
     "twinkle": ("Iskry", True, True),
     "fire": ("Ogień", False, True),
+    "storm": ("Burza", True, True),
     "pulse": ("Puls muzyki", True, True),
     "spectrum": ("Spektrum", False, True),
     "vu": ("Wskaźnik VU", True, True),
+    "beat": ("Beat", False, True),
+    "ambilight": ("Ambilight", False, True),
 }
 # react to system audio; for these "speed" is the sensitivity
-AUDIO_EFFECTS = {"pulse", "spectrum", "vu"}
+AUDIO_EFFECTS = {"pulse", "spectrum", "vu", "beat"}
+# what the "speed" slider means where it isn't speed (the panel relabels it)
+SPEED_LABELS = {**{k: "Czułość" for k in AUDIO_EFFECTS}, "ambilight": "Nasycenie"}
+# how the panel groups the effects: (id, label, effects)
+EFFECT_GROUPS = [
+    ("basic", "Podstawowe", ["static", "gradient", "cycle", "breathe", "heartbeat"]),
+    ("motion", "Ruch", ["rainbow", "wave", "flow", "comet", "chase"]),
+    ("mood", "Klimat", ["aurora", "twinkle", "fire", "storm"]),
+    ("react", "Reaktywne", ["pulse", "spectrum", "vu", "beat", "ambilight"]),
+]
+assert sorted(e for _, _, g in EFFECT_GROUPS for e in g) == sorted(EFFECTS)
+# one-line description per effect, shown in the panel
+EFFECT_INFO = {
+    "static": "Jeden kolor na wszystkim, bez ruchu.",
+    "gradient": "Płynne przejście od pierwszego do drugiego koloru wzdłuż każdego paska.",
+    "cycle": "Wszystko naraz zmienia kolor po kolei przez całą tęczę.",
+    "breathe": "Kolor powoli rozjaśnia się i gaśnie, jak oddech.",
+    "heartbeat": "Podwójne uderzenie światła w rytmie serca, potem chwila przerwy.",
+    "rainbow": "Tęcza przesuwająca się wzdłuż pasków i wentylatorów.",
+    "wave": "Fala jasności biegnąca wzdłuż paska w jednym kolorze.",
+    "flow": "Dwa kolory płynnie przelewające się wzdłuż paska.",
+    "comet": "Jasna głowa komety z gasnącym ogonem okrąża każdą strefę; drugi kolor to tło.",
+    "chase": "Co trzeci LED świeci pierwszym kolorem i wszystkie przesuwają się jak w neonie.",
+    "twinkle": "Spokojne tło (drugi kolor) i pojedyncze iskry pierwszego koloru zapalające się losowo.",
+    "aurora": "Wolne, falujące smugi dwóch kolorów, jak zorza polarna.",
+    "fire": "Płomienie wędrujące od początku paska: żółć i pomarańcz u podstawy, czerwień wyżej.",
+    "storm": "Ciemne, płynące chmury i co kilka sekund błyskawica na wszystkich urządzeniach naraz.",
+    "pulse": "Jasność podąża za basem w muzyce, od drugiego koloru do pierwszego.",
+    "spectrum": "Korektor graficzny: bas na początku paska, wysokie tony na końcu.",
+    "vu": "Pasek rośnie od środka razem z głośnością, kolor przechodzi w drugi na końcach.",
+    "beat": "Na każde uderzenie basu nowy kolor, który rozbłyska i wygasa.",
+    "ambilight": "Kolory z ekranu: każdy LED pokazuje swój fragment obrazu od lewej do prawej.",
+}
+assert sorted(EFFECT_INFO) == sorted(EFFECTS)
 
 
 def log(msg):
@@ -80,6 +116,15 @@ def _noise(a, b):
     return (x ^ (x >> 16)) / 0xFFFFFFFF
 
 
+def _vnoise(seed, x):
+    """Smooth 1-D value noise: random at whole x, eased in between, so it never jumps."""
+    j = math.floor(x)
+    f = x - j
+    f = f * f * (3 - 2 * f)
+    a, b = _noise(seed, j), _noise(seed, j + 1)
+    return a + (b - a) * f
+
+
 _FIRE = [(0, 0, 0), (180, 10, 0), (255, 80, 0), (255, 170, 20), (255, 230, 120)]
 
 
@@ -89,7 +134,8 @@ def _fire_color(k):
     return mix(_FIRE[j], _FIRE[j + 1], k - j)
 
 
-def frame(effect, t, i, n, color, speed, color2=(0, 0, 0)):
+def frame(effect, t, i, n, color, speed, color2=(0, 0, 0), src=None):
+    """Color of LED i of n at time t. src stands in for AUDIO and SCREEN (previews)."""
     pos = i / n
     ts = t * speed
     if effect == "gradient":
@@ -123,18 +169,53 @@ def frame(effect, t, i, n, color, speed, color2=(0, 0, 0)):
             return mix(color2, color, math.sin(math.pi * (phase - bucket)))
         return color2
     if effect == "fire":
-        k = 0.55 + 0.25 * math.sin(ts * 3 + i * 0.9) + 0.35 * (_noise(i, int(ts * 12)) - 0.5)
-        return _fire_color(k * (1 - 0.35 * pos))
+        # flame tongues drift from the start of each strip (the base) towards its end; noise
+        # over position too, so neighbouring LEDs burn together instead of each on its own
+        tongues = _vnoise(1, pos * 5 - ts * 1.7)
+        detail = _vnoise(2, pos * 11 - ts * 3.3)
+        flicker = _vnoise(3, ts * 2.5)  # the whole flame breathing
+        heat = 0.5 * tongues + 0.3 * detail + 0.2 * flicker
+        return _fire_color((0.25 + 0.75 * heat) * (1.1 - 0.45 * pos))
+    if effect == "storm":
+        # drifting dark clouds; lightning picked per quarter second from t alone, so every
+        # device flashes at the same moment without sharing any state
+        sky = color2 if any(color2) else (0, 8, 30)
+        clouds = 0.35 + 0.65 * _vnoise(5, pos * 3 - ts * 0.3)
+        c = scale(sky, clouds)
+        slot = math.floor(ts * 4)
+        if _noise(77, slot) > 0.96:  # ~ one strike every 6 s at speed 1
+            p = ts * 4 - slot  # 0..1 over the 250 ms slot
+            # strike (~60 ms decay) + afterflash ~110 ms later: long enough for 20-30 fps devices
+            flash = min(1.0, math.exp(-p * 4) + 0.7 * math.exp(-((p - 0.45) * 7) ** 2))
+            near = 0.4 + 0.6 * math.exp(-((pos - _noise(78, slot)) * 3) ** 2)
+            c = mix(c, mix(color, (255, 255, 255), 0.6), flash * near)
+        return c
     if effect == "pulse":
-        return mix(color2, color, AUDIO.read().bass * speed)
+        return mix(color2, color, (src or AUDIO.read()).bass * speed)
+    if effect == "beat":  # a new color on every kick, flashing and fading out
+        a = src or AUDIO.read()
+        flash = math.exp(-(time.monotonic() - a.beat_t) * 5)
+        hue = (a.beats * 0.381966) % 1  # golden-ratio steps: consecutive beats differ clearly
+        return hsv(hue + pos * 0.08, min(1.0, (0.12 + 0.88 * flash) * speed))
+    if effect == "ambilight":
+        s = src or SCREEN.read()
+        if n == 1:
+            c = s.average
+        else:  # each LED shows its slice of the screen, left to right
+            x = pos * (len(s.columns) - 1)
+            j = min(int(x), len(s.columns) - 2)
+            c = mix(s.columns[j], s.columns[j + 1], x - j)
+        h, sat, v = colorsys.rgb_to_hsv(*(x / 255 for x in c))
+        r, g, b = colorsys.hsv_to_rgb(h, min(1.0, sat * (0.6 + 0.8 * speed)), v)  # LEDs look washed out without a boost
+        return int(r * 255), int(g * 255), int(b * 255)
     if effect == "spectrum":  # bass at the start of each strip, treble at the end
-        b = AUDIO.read().bands
+        b = (src or AUDIO.read()).bands
         x = pos * (len(b) - 1)
         j = min(int(x), len(b) - 2)
         k = b[j] + (b[j + 1] - b[j]) * (x - j)
         return hsv(pos * 0.75, min(1.0, k * speed))
     if effect == "vu":  # bar grows from the middle out, color -> color2 towards the ends
-        level = min(1.0, AUDIO.read().level * speed)
+        level = min(1.0, (src or AUDIO.read()).level * speed)
         if n == 1:
             return mix(color2, color, level)
         dist = abs((i + 0.5) / n - 0.5) * 2
@@ -164,6 +245,7 @@ class Audio:
 
     def __init__(self):
         self.bands, self.level, self.bass = [0.0] * self.BANDS, 0.0, 0.0
+        self.beats, self.beat_t = 0, 0.0  # kick count and time.monotonic() of the last one
         self.error = None
         self._used = 0.0
         self._wake = threading.Event()
@@ -177,6 +259,16 @@ class Audio:
                 self._thread.start()
             self._wake.set()
         return self
+
+    BEAT_GAP = 0.28  # s between kicks at most ~214 bpm; also stops one kick counting twice
+
+    def _detect_beat(self, energy, state):
+        """Onset on raw bass energy: a jump well above its recent average, not just loud."""
+        avg, loud = state
+        now = time.monotonic()
+        if energy > avg * 1.45 and energy > loud * 0.12 and now - self.beat_t > self.BEAT_GAP:
+            self.beats, self.beat_t = self.beats + 1, now
+        return avg * 0.96 + energy * 0.04, max(loud * 0.999, energy, self.FLOOR)
 
     def _run(self):
         # soundcard initializes COM for the importing thread, so import it here, not globally
@@ -208,6 +300,7 @@ class Audio:
             buf = np.zeros(self.FFT)
             peak, smooth = np.full(self.BANDS, self.FLOOR), np.zeros(self.BANDS)
             level_peak, level = self.FLOOR, 0.0
+            beat_state = (self.FLOOR, self.FLOOR)
             try:
                 speaker = sc.default_speaker()
                 mic = sc.get_microphone(speaker.id, include_loopback=True)
@@ -220,6 +313,7 @@ class Audio:
 
                         mag = np.abs(np.fft.rfft(buf * window)) * norm
                         v = np.array([np.sqrt(np.mean(mag[a:b] ** 2)) for a, b in bins])
+                        beat_state = self._detect_beat(float(v[:4].mean()), beat_state)
                         # per-band auto gain, but never louder than 5% of the loudest band,
                         # so quiet bands don't blow noise up to full brightness
                         peak = np.maximum.reduce([peak * 0.997, v, np.full_like(v, max(peak.max() * 0.05, self.FLOOR))])
@@ -253,10 +347,135 @@ class Audio:
 AUDIO = Audio()
 
 
+# ---------------------------------------------------------------- screen
+class Screen:
+    """The primary screen as COLS column colors (left to right) plus its average.
+
+    The GPU driver shrinks the frame to COLS x ROWS (StretchBlt, HALFTONE), so a capture
+    costs a few ms even beside a game. Like Audio: starts on the first read(), stops
+    after IDLE seconds without readers. Exclusive-fullscreen games may capture black;
+    borderless windowed works."""
+    COLS, ROWS, HZ, IDLE = 32, 18, 20, 3.0
+
+    def __init__(self):
+        self.columns, self.average = [(0, 0, 0)] * self.COLS, (0, 0, 0)
+        self.error = None
+        self._used = 0.0
+        self._wake = threading.Event()
+        self._thread = None
+
+    read = Audio.read
+
+    def _run(self):
+        import ctypes
+        import ctypes.wintypes as wt
+        import numpy as np
+
+        class BitmapInfo(ctypes.Structure):  # BITMAPINFOHEADER, enough for 32-bit DIBs
+            _fields_ = [("biSize", wt.DWORD), ("biWidth", wt.LONG), ("biHeight", wt.LONG),
+                        ("biPlanes", wt.WORD), ("biBitCount", wt.WORD), ("biCompression", wt.DWORD),
+                        ("biSizeImage", wt.DWORD), ("biXPelsPerMeter", wt.LONG),
+                        ("biYPelsPerMeter", wt.LONG), ("biClrUsed", wt.DWORD), ("biClrImportant", wt.DWORD)]
+
+        u, g = ctypes.windll.user32, ctypes.windll.gdi32
+        u.GetDC.restype = g.CreateCompatibleDC.restype = wt.HDC
+        u.GetDC.argtypes, g.CreateCompatibleDC.argtypes = [wt.HWND], [wt.HDC]
+        u.ReleaseDC.argtypes = [wt.HWND, wt.HDC]
+        g.CreateDIBSection.restype = wt.HBITMAP
+        g.CreateDIBSection.argtypes = [wt.HDC, ctypes.c_void_p, wt.UINT, ctypes.POINTER(ctypes.c_void_p),
+                                       wt.HANDLE, wt.DWORD]
+        g.SelectObject.argtypes, g.SelectObject.restype = [wt.HDC, wt.HGDIOBJ], wt.HGDIOBJ
+        g.DeleteObject.argtypes, g.DeleteDC.argtypes = [wt.HGDIOBJ], [wt.HDC]
+        g.SetStretchBltMode.argtypes = [wt.HDC, ctypes.c_int]
+        g.StretchBlt.argtypes = [wt.HDC] + [ctypes.c_int] * 4 + [wt.HDC] + [ctypes.c_int] * 4 + [wt.DWORD]
+        size = self.COLS * self.ROWS * 4
+        delay = 1
+
+        while True:
+            self._wake.wait()
+            src = dst = bmp = None
+            try:
+                src = u.GetDC(None)
+                dst = g.CreateCompatibleDC(src)
+                info = BitmapInfo(biSize=ctypes.sizeof(BitmapInfo), biWidth=self.COLS,
+                                  biHeight=-self.ROWS, biPlanes=1, biBitCount=32)  # top-down BGRA
+                bits = ctypes.c_void_p()
+                bmp = g.CreateDIBSection(dst, ctypes.byref(info), 0, ctypes.byref(bits), None, 0)
+                if not bmp:
+                    raise OSError("CreateDIBSection failed")
+                g.SelectObject(dst, bmp)
+                g.SetStretchBltMode(dst, 4)  # HALFTONE: averages pixels instead of skipping them
+                smooth = None
+                self.error = None
+                while time.monotonic() - self._used < self.IDLE:
+                    w, h = u.GetSystemMetrics(0), u.GetSystemMetrics(1)
+                    g.StretchBlt(dst, 0, 0, self.COLS, self.ROWS, src, 0, 0, w, h, 0x00CC0020)  # SRCCOPY
+                    g.GdiFlush()
+                    img = np.frombuffer(ctypes.string_at(bits, size), np.uint8).reshape(self.ROWS, self.COLS, 4)
+                    cols = img[:, :, 2::-1].mean(axis=0)  # BGRA -> RGB, average each column
+                    smooth = cols if smooth is None else smooth * 0.55 + cols * 0.45  # no flicker on cuts
+                    self.columns = [tuple(int(x) for x in c) for c in smooth]
+                    self.average = tuple(int(x) for x in smooth.mean(axis=0))
+                    time.sleep(1 / self.HZ)
+                delay = 1
+            except Exception as e:
+                if f"screen: {e}" != self.error:
+                    self.error = f"screen: {e}"
+                    log(self.error)
+                delay = min(delay * 2, 30)
+                time.sleep(delay)
+            finally:
+                if bmp:
+                    g.DeleteObject(bmp)
+                if dst:
+                    g.DeleteDC(dst)
+                if src:
+                    u.ReleaseDC(None, src)
+            if time.monotonic() - self._used >= self.IDLE:
+                self._wake.clear()
+
+
+SCREEN = Screen()
+
+
+# ---------------------------------------------------------------- previews
+class PreviewSource:
+    """Stand-in for AUDIO and SCREEN in effect previews at time t: a 120 bpm kick and a
+    slowly shifting picture, so drawing previews never starts a real capture."""
+
+    def __init__(self, t):
+        age = t % 0.5
+        kick = math.exp(-age * 7)
+        self.beats, self.beat_t = int(t / 0.5), time.monotonic() - age
+        self.bass = kick
+        self.level = min(1.0, 0.3 + 0.6 * kick * (0.75 + 0.25 * math.sin(t * 1.3)))
+        self.bands = [min(1.0, kick * math.exp(-b / 4) + 0.35 * _vnoise(40 + b, t * 3))
+                      for b in range(Audio.BANDS)]
+        self.columns = [hsv(0.55 + 0.2 * math.sin(t * 0.8 + c / 5), 0.45 + 0.4 * _vnoise(60 + c, t))
+                        for c in range(Screen.COLS)]
+        self.average = tuple(sum(c[k] for c in self.columns) // Screen.COLS for k in range(3))
+
+
+def previews(color, color2, speed, leds=10, frames=48, fps=12):
+    """A short looping animation of every effect for the panel: {effect: [[hex] * leds] * frames}."""
+    out = {}
+    for effect in EFFECTS:
+        seq = []
+        for f in range(frames):
+            t = f / fps
+            src = PreviewSource(t)
+            seq.append(["%02x%02x%02x" % frame(effect, t, i, leds, color, speed, color2, src)
+                        for i in range(leds)])
+        out[effect] = seq
+    return out
+
+
 # ---------------------------------------------------------------- devices
 class Device:
     name, backend, led_count, max_fps = "?", "?", 1, FPS
     segments = None  # LED count of each zone, in LED order; None = one zone
+    zone_names = ()  # names of those zones, for the panel
+    kind = "other"  # what it is (motherboard, gpu, mouse, mic, ...): the panel draws it accordingly
     resizable = ()   # zones whose LED count the user sets: [{name, size, min, max}]
 
     def prepare(self):
@@ -280,6 +499,12 @@ class OpenRGBDevice(Device):
         zones = [len(z.leds) for z in dev.zones if z.leds]
         if sum(zones) == len(dev.leds) > 0:
             self.segments = zones
+            self.zone_names = [z.name for z in dev.zones if z.leds]
+        try:
+            from openrgb.utils import DeviceType
+            self.kind = DeviceType(dev.type).name.lower()
+        except (ImportError, ValueError):
+            pass
         # ARGB headers: OpenRGB can't know what is plugged in, the size is set by the user
         self.resizable = [{"name": z.name, "size": len(z.leds), "min": z.leds_min, "max": z.leds_max}
                           for z in dev.zones if getattr(z, "leds_min", 0) != getattr(z, "leds_max", 0)]
@@ -312,6 +537,7 @@ class OpenRGBDevice(Device):
 
 class RivalDevice(Device):
     backend, max_fps = "rivalcfg", 10  # each zone is a separate HID write
+    kind = "mouse"
 
     def __init__(self, mouse):
         self.mouse = mouse
@@ -366,6 +592,7 @@ class MaonoDevice(Device):
     and a frame is 1-3 writes, so frames go out from a writer thread: set_leds() only hands over the
     newest frame and never stalls the render loop that drives the other devices."""
     backend, max_fps = "hid", 15  # divides 30 and 60, so frames stay evenly spaced
+    kind = "microphone"
     VID, PID = 0x352F, 0x010C
     LIGHT, COLOR, BRIGHTNESS, MODE = 0x36, 0x38, 0x37, 0x39  # also 0x22: off while muted
     # palette index -> hue in degrees; 0 is the mic's built-in rainbow, 8 is white
@@ -456,6 +683,29 @@ def find_hid_path(spec):
             continue
         return d["path"]
     return None
+
+
+def restore_direct(devices):
+    """OpenRGB can put a controller back into a hardware mode behind our back: it does so
+    while it finishes starting up, and its GUI can too. Per-LED colors written on top of
+    a hardware effect make ARGB headers blink at random. Re-read the modes from the server
+    and switch back to Direct where needed.
+
+    Returns (devices switched back, True if OpenRGB's device list changed: rescan)."""
+    ours = [d for d in devices if isinstance(d, OpenRGBDevice) and d.mode == "direct"]
+    clients = {id(d.client): d.client for d in ours}
+    counts = {k: len(c.devices) for k, c in clients.items()}
+    for c in clients.values():
+        c.update()  # refreshes the Device objects in place while the count stays the same
+    if any(len(c.devices) != counts[k] for k, c in clients.items()):
+        return [], True
+    fixed = []
+    for d in ours:
+        if d.dev.modes[d.dev.active_mode].name.lower() != "direct":
+            log(f"{d.name}: OpenRGB switched to '{d.dev.modes[d.dev.active_mode].name}', back to Direct")
+            d.dev.set_mode("direct")
+            fixed.append(d)
+    return fixed, False
 
 
 def _keep_zone_limits():

@@ -8,6 +8,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 from xml.sax.saxutils import escape
 
@@ -37,6 +38,8 @@ _shell32.ShellExecuteExW.argtypes = [ctypes.POINTER(_ShellExecuteInfo)]
 _kernel32.WaitForSingleObject.argtypes = [wt.HANDLE, wt.DWORD]
 _kernel32.GetExitCodeProcess.argtypes = [wt.HANDLE, ctypes.POINTER(wt.DWORD)]
 _kernel32.CloseHandle.argtypes = [wt.HANDLE]
+_kernel32.GetModuleHandleW.argtypes = [wt.LPCWSTR]
+_kernel32.GetModuleHandleW.restype = wt.HMODULE
 
 
 def run_elevated(exe, args, cwd=None, wait=True, show=False):
@@ -184,6 +187,68 @@ def process_running(image):
 def shutting_down():
     """True while Windows is signing out / shutting down (SM_SHUTTINGDOWN)."""
     return bool(ctypes.windll.user32.GetSystemMetrics(0x2000))
+
+
+# ---------------------------------------------------------------- session end
+_WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM)
+
+
+class _WndClass(ctypes.Structure):
+    _fields_ = [("style", wt.UINT), ("lpfnWndProc", _WNDPROC), ("cbClsExtra", ctypes.c_int),
+                ("cbWndExtra", ctypes.c_int), ("hInstance", wt.HINSTANCE), ("hIcon", wt.HICON),
+                ("hCursor", wt.HANDLE), ("hbrBackground", wt.HBRUSH), ("lpszMenuName", wt.LPCWSTR),
+                ("lpszClassName", wt.LPCWSTR)]
+
+
+_user32 = ctypes.WinDLL("user32", use_last_error=True)
+_user32.DefWindowProcW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
+_user32.DefWindowProcW.restype = ctypes.c_ssize_t
+_user32.CreateWindowExW.argtypes = [wt.DWORD, wt.LPCWSTR, wt.LPCWSTR, wt.DWORD, ctypes.c_int, ctypes.c_int,
+                                    ctypes.c_int, ctypes.c_int, wt.HWND, wt.HMENU, wt.HINSTANCE, wt.LPVOID]
+_user32.CreateWindowExW.restype = wt.HWND
+_user32.GetMessageW.argtypes = [ctypes.POINTER(wt.MSG), wt.HWND, wt.UINT, wt.UINT]
+_user32.DispatchMessageW.argtypes = [ctypes.POINTER(wt.MSG)]
+WM_QUERYENDSESSION, WM_ENDSESSION = 0x0011, 0x0016
+
+
+def on_session_end(callback):
+    """Call callback() when Windows shuts down or signs out, before the process is killed.
+
+    A hidden top-level window of our own receives WM_ENDSESSION whatever the GUI toolkit
+    does (a tray app's webview window may never see it). The shutdown level asks Windows
+    to notify us before ordinary apps, so OpenRGB is still running while we turn lights
+    off through it. Returns the window handle (sending it WM_ENDSESSION simulates a shutdown)."""
+    _kernel32.SetProcessShutdownParameters(0x3FF, 0)  # highest app level = notified first
+    ready, holder = threading.Event(), {}
+
+    def wndproc(hwnd, msg, wparam, lparam):
+        if msg == WM_QUERYENDSESSION:
+            return 1  # never block the shutdown
+        if msg == WM_ENDSESSION:
+            if wparam:  # the session really ends (not cancelled by another app)
+                try:
+                    callback()
+                except Exception as e:
+                    print(f"[rgbman] session end: {e}", file=sys.stderr)
+            return 0
+        return _user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+
+    def run():
+        proc = _WNDPROC(wndproc)  # keep a reference for the window's lifetime
+        wc = _WndClass(lpfnWndProc=proc, lpszClassName="rgbman_session",
+                       hInstance=_kernel32.GetModuleHandleW(None))
+        _user32.RegisterClassW(ctypes.byref(wc))
+        # top-level but never shown: message-only windows don't get WM_ENDSESSION
+        holder["hwnd"] = _user32.CreateWindowExW(0, "rgbman_session", "rgbman", 0, 0, 0, 0, 0,
+                                                 None, None, wc.hInstance, None)
+        ready.set()
+        msg = wt.MSG()
+        while _user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+            _user32.DispatchMessageW(ctypes.byref(msg))
+
+    threading.Thread(target=run, daemon=True).start()
+    ready.wait(2)
+    return holder.get("hwnd")
 
 
 def start_openrgb(path):

@@ -4,7 +4,16 @@ Jeden program stworzony w celu spięcia urządzeń i wzbogacony o parę efektów
 
 ## Co potrafi
 
-- **16 efektów**: statyczny, gradient, tęcza, cykl kolorów, oddech, bicie serca, fala, przepływ, zorza, kometa, pościg, iskry, ogień oraz trzy reagujące na dźwięk z komputera (puls muzyki, spektrum, wskaźnik VU). Mikrofon nie jest potrzebny, bo efekty dźwiękowe słuchają tego, co gra na domyślnym wyjściu audio.
+- **19 efektów** w czterech grupach, każdy z opisem i animowanym podglądem na przycisku:
+  - podstawowe: statyczny, gradient, cykl kolorów, oddech, bicie serca,
+  - ruch: tęcza, fala, przepływ, kometa, pościg,
+  - klimat: zorza, iskry, ogień, burza,
+  - reaktywne: puls muzyki, spektrum, wskaźnik VU, beat (nowy kolor na każde uderzenie basu) i ambilight (kolory z ekranu).
+
+  Mikrofon nie jest potrzebny, bo efekty dźwiękowe słuchają tego, co gra na domyślnym wyjściu audio.
+- **Menu w zasobniku** ze zmianą efektu i profilu jednym kliknięciem.
+- **Harmonogram**, czyli profil albo wyłączenie świateł o wybranej godzinie, codziennie.
+- **Interfejs po polsku i angielsku**: *Ustawienia* → *Język*.
 - **Synchronizacja po strefach.** Każda strefa (pasek, łańcuch wentylatorów, pojedynczy LED na karcie) dostaje cały efekt, więc wszystko świeci w fazie.
 - **Ustawienia per urządzenie**: własny efekt lub kolor (np. karta statycznie, reszta w ruchu), tryb „jeden kolor” dla urządzeń z poprzestawianą kolejnością LED-ów (np. mysz), wyprzedzenie w ms i limit klatek na sekundę.
 - **Profile** zapamiętujące cały układ, łącznie z ustawieniami per urządzenie.
